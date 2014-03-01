@@ -1,5 +1,6 @@
 #!/bin/sh
 set -xe
+rm -rf libwebsockets-build
 mkdir libwebsockets-build
 cd libwebsockets-build
 cmake ../libwebsockets -DLWS_WITHOUT_EXTENSIONS=ON -DLWS_WITH_SSL=OFF -DCMAKE_C_FLAGS="-I.. -g3"
