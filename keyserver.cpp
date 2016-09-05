@@ -24,7 +24,8 @@ extern "C" {
 
 #define NO_VOTE 0xffff
 #define UNVOTE_DELAY (60*5)
-#define BATCH_SIZE 10
+#define BATCH_SIZE 15
+#define CLUMP_SIZE 15
 #define WORKERS 4
 #define MAX_POPULARITY 6
 
@@ -71,7 +72,7 @@ static bool g_running;
 static uint64_t g_next_pid;
 
 static uint64_t g_frame;
-static uint64_t g_next_frame_time;
+static uint64_t g_next_clump_time;
 
 static std::map<uint16_t, size_t> g_popularity;
 
@@ -91,6 +92,8 @@ static int g_mr_headless = -1;
 #if USE_EPOLL
 static int g_epoll_fd;
 #endif
+
+static uint16_t g_last_input = 0;
 
 std::mutex g_blargh_lock;
 
@@ -114,7 +117,7 @@ static uint64_t get_time() {
 static void set_running(bool running) {
 	printf("running <- %d\n", running);
 	if(running && !g_running) {
-		g_next_frame_time = get_time();
+		g_next_clump_time = get_time();
 	}
 	g_running = running;
 }
@@ -140,6 +143,7 @@ static void set_vote(player_data *pl, uint16_t vote) {
 			opl->voting_players_idx = pl->voting_players_idx;
 			g_voting_players[opl->voting_players_idx] = fd;
 		}
+		pl->voting_players_idx = 0x8888888888888888ull;
 	} else if(pl->vote == NO_VOTE) {
 		pl->voting_players_idx = g_voting_players.size();
 		g_voting_players.push_back(pl->fd);
@@ -153,7 +157,15 @@ static uint16_t get_input() {
 		return 0;
 	std::uniform_int_distribution<size_t> distr(0, g_voting_players.size() - 1);
 	size_t lucky = distr(g_rand);
-	return g_players[g_voting_players[lucky]].vote;
+	int fd = g_voting_players[lucky];
+	uint16_t vote = g_players[fd].vote;
+	if(vote == NO_VOTE) {
+		fprintf(stderr, "I am a bad programmer? (%d)\n", fd);
+		g_players[fd].vote = 0;
+		set_vote(&g_players[fd], NO_VOTE);
+		vote = 0;
+	}
+	return vote;
 }
 
 static void kill_player(player_data *pl) {
@@ -219,10 +231,12 @@ static void add_to_history(uint16_t input) {
 	please_eq(write(g_history_fd, &input, sizeof(input)), 2);
 }
 
-static void do_frame() {
-	uint16_t input = get_input();
-	add_to_history(input);
-	g_frame++;
+static void do_clump() {
+	g_last_input = get_input();
+	do {
+		add_to_history(g_last_input);
+		g_frame++;
+	} while(g_frame % CLUMP_SIZE != 0);
 
 	if(g_frame % 60 == 0)
 		printf("f %llu\n", (unsigned long long) g_frame);
@@ -278,12 +292,17 @@ static int keyserver_callback(struct libwebsocket_context *context, struct libwe
 		bool is_magic = getpeername(fd, (struct sockaddr *) &sin, &len) != -1 &&
 			ntohl(sin.sin_addr.s_addr) == 0x7f000001;
 		player_data *pl = &g_players[fd];
+		if(pl->wsi) {
+			fprintf(stderr, "Duplicate player?\n");
+			kill_player(pl);
+		}
 		*pl = player_data();
 		pl->wsi = wsi;
 		pl->fd = fd;
 		pl->pid = g_next_pid++;
 		pl->magic = is_magic;
 		pl->vote = NO_VOTE;
+		pl->voting_players_idx = 0x8888888888888888ull;
 		if(!is_magic)
 			g_num_players++;
 		break;
@@ -402,13 +421,13 @@ int main() {
 		serve();
 		if(g_running) {
 			uint64_t now = get_time();
-			if(now >= g_next_frame_time) {
-				do_frame();
-				if(now - g_next_frame_time >= 300000) {
+			if(now >= g_next_clump_time) {
+				do_clump();
+				if(now - g_next_clump_time >= 500000) {
 					// we've fallen behind...
-					g_next_frame_time = now;
+					g_next_clump_time = now;
 				}
-				g_next_frame_time += (1000000/60);
+				g_next_clump_time += CLUMP_SIZE * 1000000 /60;
 			}
 		}
 	}

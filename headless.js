@@ -180,11 +180,11 @@ function writeWithBackup(base, buf) {
 			var filename = base + '.' + i;
 			if(!fs.existsSync(filename)) {
 				fs.renameSync(base, filename);
-				return;
+				break;
 			}
 		}
 	}
-	fs.writeFileSync(filename, buf);
+	fs.writeFileSync(base, buf);
 }
 
 function saveState() {
@@ -209,7 +209,7 @@ function saveState() {
 			if(!/\.sgm$/.test(filename))
 				return;
 			var frame = parseInt(filename);
-			if(currentFrame - frame > (60*60) && frame % (60*60*10) != 0) {
+			if(currentFrame - frame > (60*60) && frame % (60*60*5) != 0) {
 				try {
 					fs.unlinkSync(savesDir + filename);
 				} catch(e) {}
